@@ -10,6 +10,8 @@ local nearbyDoors, closestDoor = {}, {}
 local paused = false
 local doorData = {}
 
+local renderDoorIcon = false
+
 -- Functions
 function Draw3DText(coords, str)
     local onScreen, worldX, worldY = World3dToScreen2d(coords.x, coords.y, coords.z)
@@ -104,17 +106,6 @@ local function loadAnimDict(dict)
 	while not HasAnimDictLoaded(dict) do
 		Wait(0)
 	end
-end
-
-local function displayNUIText(text)
-	local color = Config.ChangeColor and (closestDoor.data.locked and Config.LockedColor or Config.UnlockedColor) or Config.DefaultColor
-	SendNUIMessage({
-		type = "setDoorText",
-		enable = true,
-		text = text,
-		color = color
-	})
-	Wait(1)
 end
 
 local function HandleDoorDebug()
@@ -808,6 +799,59 @@ end, false)
 TriggerEvent("chat:removeSuggestion", "/remotetriggerdoor")
 RegisterKeyMapping('remotetriggerdoor', Lang:t("general.keymapping_remotetriggerdoor"), 'keyboard', 'H')
 
+
+--Updates the command display help text in the top left corner (gta 5 online interaction)
+-- wird zuerst gelöscht und dann neu erstellt mit dem passenden text (türe abschließen/aufschließen)
+local function updateTextCommandDisplayHelp(locked)
+	ClearAllHelpMessages()
+
+	local displayText = ""
+	if locked then
+		displayText = "aufschließen"
+	else
+		displayText = "abschließen"
+	end
+
+	local doorType = "Tür"
+	if closestDoor.data.doorType == "garage" then
+		doorType = "Garage"
+	end
+
+	AddTextEntry('dooraction', doorType .. ' mit ~INPUT_CONTEXT~ ' .. displayText .. '.')
+    BeginTextCommandDisplayHelp('dooraction')
+    EndTextCommandDisplayHelp(0, true, true, -1)
+end
+
+-- startet eine Schleife, die das Schloss-Icon an der Tür anzeigt
+-- zeigt außerdem die TextCommandDisplayHelp an (und das auch bereits beim ersten Aufruf der Funktion, da lastLockState negativ mit dem aktuellen Lockstate deklariet wird)
+local function showDoorIcon()
+	local lastLockState = not closestDoor.data.locked
+	CreateThread(function()
+		while renderDoorIcon do
+			-- Custom code for displaying lock icon on door
+			local doorCoords = closestDoor.data.textCoords
+			RequestStreamedTextureDict('mpsafecracking', true)
+			SetDrawOrigin(doorCoords.x, doorCoords.y, doorCoords.z)
+
+			-- Die commanddisplayhelp-Funktion wird nur aufgerufen, wenn der Spieler
+			-- auf die Tuer zugreifen darf und sich der LockState geänder hat!
+			if isAuthorized(closestDoor.data) and (closestDoor.data.locked ~= lastLockState) then
+				lastLockState = closestDoor.data.locked
+				updateTextCommandDisplayHelp(lastLockState)
+			end
+
+			if closestDoor.data.locked then
+				DrawSprite('mpsafecracking', 'lock_closed', 0, 0, 0.03, 0.03 * GetAspectRatio(true), 0, 255, 255, 255, 100)
+			else
+				DrawSprite('mpsafecracking', 'lock_open', 0, 0, 0.03, 0.03 * GetAspectRatio(true), 0, 255, 255, 255, 100)
+			end
+			ClearDrawOrigin()
+			Wait(0)
+		end
+	end)
+end
+
+
 -- Threads
 
 CreateThread(function()
@@ -851,26 +895,16 @@ CreateThread(function()
 						playerCoords = GetEntityCoords(playerPed)
 						closestDoor.distance = #(closestDoor.data.textCoords - playerCoords)
 						if closestDoor.distance < (closestDoor.data.distance or closestDoor.data.maxDistance) then
-							local authorized = isAuthorized(closestDoor.data)
-							local displayText = ""
-
-							if not closestDoor.data.hideLabel and Config.UseDoorLabelText and closestDoor.data.doorLabel then
-								displayText = closestDoor.data.doorLabel
-							else
-								if not closestDoor.data.locked and not authorized then
-									displayText = Lang:t("general.unlocked")
-								elseif not closestDoor.data.locked and authorized then
-									displayText = Lang:t("general.unlocked_button")
-								elseif closestDoor.data.locked and not authorized then
-									displayText = Lang:t("general.locked")
-								elseif closestDoor.data.locked and authorized then
-									displayText = Lang:t("general.locked_button")
-								end
+							-- Spieler ist  nahe an der Tür, das Schloss-Icon soll geladen werden
+							if not renderDoorIcon then
+								renderDoorIcon = true
+								showDoorIcon(displayText)
 							end
-
-							if displayText ~= "" and (closestDoor.data.hideLabel == nil or not closestDoor.data.hideLabel) then displayNUIText(displayText) end
 						else
-							hideNUI()
+							-- Spieler ist zu weit weg von einer Tür
+                            -- Icon wird nicht mehr gerendert und der commandhelp
+                            renderDoorIcon = false
+                            ClearAllHelpMessages()
 							break
 						end
 					end
